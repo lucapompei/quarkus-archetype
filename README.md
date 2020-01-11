@@ -18,7 +18,7 @@ Summary features
 - Junit 5 with coverage >= 75%;
 - API response time auto-calculated and logged;
 - Swagger auto-generated;
-- Dockerfile pre-configuration; ??
+- Dockerfile pre-configuration;
 - Jenkinsfile pre-configuration;
 - OpenShift pre-configuration;
 - Fully customizable through the environment properties.
