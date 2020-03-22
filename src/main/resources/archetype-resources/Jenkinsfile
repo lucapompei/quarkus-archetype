@@ -16,12 +16,32 @@ pipeline {
     openShiftCredentials = 'KUBECONFIG_CONTENT_CREDENTIALS'
     openShiftCluster = '/** INSERT YOUR OPENSHIFT CLUSTER **/'
     openShiftProjectName = '/** INSERT YOUR OPENSHIFT PROJECT NAME **/'
+    
+    // Mattermost properties
+    mattermostChannel = 'MY_MATTERMOST_CHANNEL'
+    mattermostUrlWebHook = '/** INSERT YOUR MATTERMOST WEBHOOK **/'
 
   }
   
   agent any
   
   stages {
+  
+    stage('Defining environment') {
+      steps {
+        script {
+          echo "Defining environment"
+          if (env.BRANCH_NAME != "master") {
+            echo "Setting master env"
+            env.ENVIRONMENT = "master"
+            env.GIT_TAG = sh(returnStdout: true, script: 'git tag -l --points-at HEAD').trim()
+          } else {
+            echo "Setting dev env"
+            env.ENVIRONMENT = "dev"
+          }
+        }
+      }
+    }
 
     stage('Compiling application') {
       steps {
@@ -35,15 +55,15 @@ pipeline {
     stage('SonarQube analysis') {
 	    steps {
 	      script { 
-		      try {
-            // requires SonarQube Scanner 2.8+
-            def scannerHome = tool 'SonarQube Scanner';
-            withSonarQubeEnv(sonarServer) {
-              sh "${scannerHome}/bin/sonar-scanner"
+		    try {
+              // requires SonarQube Scanner 2.8+
+              def scannerHome = tool 'SonarQube Scanner';
+              withSonarQubeEnv(sonarServer) {
+                sh "${scannerHome}/bin/sonar-scanner"
+              }
+            } catch (Exception e) {
+              echo "Error during reporting on SonarQube"
             }
-          } catch (Exception e) {
-            echo "Error during reporting on SonarQube"
-          }
 	   	  }
 	    }
 	  }
@@ -53,8 +73,11 @@ pipeline {
         script {
           echo "Building Docker image"
           docker.withRegistry(registryURL + projectName, registryCredential) {
-            def customImage = docker.build(projectName + ':latest')
-            customImage.push()
+            docker.build(projectName + ":latest").push()
+            docker.build(projectName + ":${env.BUILD_NUMBER}").push()
+            if (env.ENVIRONMENT == "master" && env.GIT_TAG != "") {
+              docker.build(projectName + ":${env.GIT_TAG}").push()
+            }
             echo "Docker image pushed"
           }
         }
@@ -64,14 +87,19 @@ pipeline {
     stage('Publishing on OpenShift') {
       steps {
         script {
-          echo "Publishing on OpenShift"
-          withCredentials([kubeconfigContent(credentialsId: openShiftCredentials, variable: 'KUBECONFIG_CONTENT')]){
-            sh '''echo "$KUBECONFIG_CONTENT" > kubeconfig'''
-            // Update OpenShift configuration
-            sh("oc apply --kubeconfig=kubeconfig -f config/deployment.yml")
-            // Try to expose route, otherwise ignore the error
-            sh '''! oc expose --kubeconfig=kubeconfig svc/"$projectName"'''
-            sh '''oc rollout latest --kubeconfig=kubeconfig dc/"$projectName"'''
+          if (env.ENVIRONMENT != "master") {
+            echo "Master branch, skipping deploy on Openshift"
+          } else {
+            echo "Publishing on OpenShift"
+            sh "config/interpolate.sh"
+            withCredentials([kubeconfigContent(credentialsId: openShiftCredentials, variable: 'KUBECONFIG_CONTENT')]){
+              sh '''echo "$KUBECONFIG_CONTENT" > kubeconfig'''
+              // Update OpenShift configuration
+              sh("oc apply --kubeconfig=kubeconfig -f config/deployment.yml")
+              // Try to expose route, otherwise ignore the error
+              sh '''! oc expose --kubeconfig=kubeconfig svc/"$projectName"'''
+              sh '''oc rollout latest --kubeconfig=kubeconfig dc/"$projectName"'''
+            }
           }
         }
       }
@@ -80,12 +108,61 @@ pipeline {
     stage('Verifying') {
       steps {
         script {
-          echo "Verifying"
-          sh '''oc rollout status dc/"$projectName"'''
+          if (env.ENVIRONMENT != "master") {
+            echo "Master branch, skipping verifying on Openshift"
+          } else {
+            echo "Verifying"
+            sh '''oc rollout status dc/"$projectName"'''
+          }
         }
+      }
+    }
+    
+    post {
+      always {
+        echo 'One way or another, I have finished'
+        deleteDir() /* clean up our workspace */
+      }
+
+      success {
+        mattermostSend(color: "#a4c639", icon: "https://jenkins.io/images/logos/jenkins/jenkins.png", message: "Build n.${env.BUILD_NUMBER} of ${env.JOB_NAME} completed", channel: $mattermostChannel, endpoint: $mattermostUrlWebHook)
+      }
+
+      unstable {
+        mattermostSend(color: "#ffbf00", icon: "https://jenkins.io/images/logos/jenkins/jenkins.png", message: "Build Unstable!", channel: $mattermostChannel, endpoint: $mattermostUrlWebHook)
+      }
+
+      failure {
+        mattermostSend(color: "#c0392b", icon: "https://jenkins.io/images/logos/jenkins/jenkins.png", message: "WARNING -- Build FAILURE!!", channel: $mattermostChannel, endpoint: $mattermostUrlWebHook)
+      }
+
+      changed {
+        mattermostSend(color: "#ffbf00", icon: "https://jenkins.io/images/logos/jenkins/jenkins.png", message: "Things were different before...", channel: $mattermostChannel, endpoint: $mattermostUrlWebHook)
       }
     }
 
   }
 
+}
+
+@NonCPS
+def getChangeString() {
+  MAX_MSG_LEN = 100
+  def changeString = ""
+
+  echo "Gathering SCM changes"
+  def changeLogSets = currentBuild.rawBuild.changeSets
+  for (int i = 0; i < changeLogSets.size(); i++) {
+    def entries = changeLogSets[i].items
+    for (int j = 0; j < entries.length; j++) {
+      def entry = entries[j]
+      truncated_msg = entry.msg.take(MAX_MSG_LEN)
+      changeString += " - ${truncated_msg} [${entry.author}]\n"
+    }
+  }
+
+  if (!changeString) {
+    changeString = " - No new changes"
+  }
+  return changeString
 }
