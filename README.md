@@ -1,4 +1,4 @@
-# Quarkus Archetype v.1.0.0
+# Quarkus Archetype v.1.1.0
 
 [![Build Status](https://travis-ci.org/lucapompei/quarkus-archetype.svg?branch=master)](https://travis-ci.org/lucapompei/quarkus-archetype) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0) [![CodeFactor](https://www.codefactor.io/repository/github/lucapompei/quarkus-archetype/badge)](https://www.codefactor.io/repository/github/lucapompei/quarkus-archetype)
 
@@ -18,6 +18,7 @@ Summary features
 - Junit 5 with coverage >= 75%;
 - API response time auto-calculated and logged;
 - Swagger auto-generated;
+- Predisposition to cache;
 - Dockerfile pre-configuration;
 - Jenkinsfile pre-configuration;
 - OpenShift pre-configuration;
